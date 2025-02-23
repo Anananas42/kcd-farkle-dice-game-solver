@@ -1,6 +1,8 @@
 from itertools import combinations, combinations_with_replacement
 from collections import Counter
-from typing import List, Tuple, Optional, Dict
+from typing import Dict, List, Tuple, Optional, Any
+import numpy as np
+import math
 
 DiceValues = Tuple[int, ...]  # Tuple of 1-6 integers
 ScoringCombination = Tuple[List[int], int]  # (dice_list, score)
@@ -138,11 +140,103 @@ class StateTransition:
                 results[n-1] = best_combo
         
         return results
-    
+
+    @staticmethod
+    def get_permutation_count(dice_combo: Tuple[int, ...]) -> int:
+        """
+        Calculate the number of unique permutations for a combination of dice.
+        Uses multinomial coefficient to handle repeated values correctly.
+        
+        Args:
+            dice_combo: Tuple of dice values (sorted)
+        
+        Returns:
+            Number of unique permutations
+        """
+        n = len(dice_combo)
+        # Count occurrences of each value
+        value_counts = list(Counter(dice_combo).values())
+        
+        # Calculate multinomial coefficient: n! / (n1! * n2! * ... * nk!)
+        # where n is total length and ni are counts of each unique value
+        result = math.factorial(n)
+        for count in value_counts:
+            result //= math.factorial(count)
+        
+        return result
+
+    @staticmethod
+    def aggregate_scores_for_n_dice(n: int, lookup_table: Dict[Tuple[int, ...], List[Any]]) -> List[np.ndarray]:
+        """
+        Aggregates all possible scores for n dice when putting aside m dice (for m in 1..n).
+        None results are counted as score 0. Takes into account all possible permutations
+        of each dice combination.
+        
+        Args:
+            n: Number of dice rolled
+            lookup_table: Precomputed lookup table from generate_dice_combinations_lookup()
+        
+        Returns:
+            List[np.ndarray]: List of length n, where each element is a numpy array representing
+            the frequency of scores for putting aside m dice (m is the index + 1).
+            Each array index i represents the frequency of score i*50.
+        """
+        max_score = 8000  # Maximum possible score with 6 dice
+        array_size = max_score // 50 + 1  # Size needed to represent all possible scores
+        
+        # Initialize list of arrays for each m in 1..n
+        score_frequencies = [np.zeros(array_size, dtype=int) for _ in range(n)]
+        
+        # Generate all possible n-dice combinations
+        for dice_combo in combinations_with_replacement(range(1, 7), n):
+            # Calculate number of permutations for this combination
+            perm_count = StateTransition.get_permutation_count(dice_combo)
+            
+            # Get the scoring combinations for this dice set
+            combinations = lookup_table[dice_combo]
+            
+            # For each number of dice we might put aside (m from 1 to n)
+            for m in range(n):
+                combination = combinations[m]  # Get the best combination for putting aside m+1 dice
+                if combination is not None:
+                    # Extract score and convert to array index
+                    _, score = combination
+                    score_index = score // 50
+                    # Increment the frequency by the number of permutations
+                    score_frequencies[m][score_index] += perm_count
+                else:
+                    # Count None as score 0
+                    score_frequencies[m][0] += perm_count
+        
+        return score_frequencies
+
+    def print_score_frequencies(score_frequencies: List[np.ndarray]):
+        """
+        Helper function to print score frequencies in a readable format.
+        Includes score 0 frequencies from None results.
+        """
+        for m, frequencies in enumerate(score_frequencies, 1):
+            print(f"\nPutting aside {m} dice:")
+            nonzero_indices = np.nonzero(frequencies)[0]
+            if len(nonzero_indices) == 0:
+                print("  No valid scores")
+                continue
+            
+            # Always print score 0 frequency (includes None results)
+            print(f"  Score 0: {frequencies[0]} occurrences")
+            
+            # Print other scores
+            for idx in nonzero_indices:
+                if idx == 0:  # Skip 0 as we've already printed it
+                    continue
+                score = idx * 50
+                count = frequencies[idx]
+                print(f"  Score {score}: {count} occurrences")
+        
 
 
 if __name__ == "__main__":
-    lookup: LookupTable = StateTransition.generate_dice_combinations_lookup()
+    lookup_table: LookupTable = StateTransition.generate_dice_combinations_lookup()
     
     # Example lookups
     print("\nExample lookups:")
@@ -155,4 +249,14 @@ if __name__ == "__main__":
 
     for dice in test_cases:
         print(f"\nDice: {dice}")
-        print(f"Results: {lookup[dice]}")
+        print(f"Results: {lookup_table[dice]}")
+
+    # Example with 2 dice
+    print("\nAnalyzing scores for 2 dice:")
+    frequencies_2_dice = StateTransition.aggregate_scores_for_n_dice(2, lookup_table)
+    StateTransition.print_score_frequencies(frequencies_2_dice)
+    
+    # Example with 3 dice
+    print("\nAnalyzing scores for 3 dice:")
+    frequencies_3_dice = StateTransition.aggregate_scores_for_n_dice(3, lookup_table)
+    StateTransition.print_score_frequencies(frequencies_3_dice)
