@@ -10,13 +10,43 @@ CombinationResult = Optional[ScoringCombination]  # None or (dice_list, score)
 LookupTable = Dict[DiceValues, List[CombinationResult]]
 
 class DiceProbabilityMap:
-    def __init__(self):
+    def __init__(self, dice_weights: Optional[Dict[int, float]] = None):
         """
-        Initializes the probability map by precomputing all possible dice combinations
-        and their probabilities.
+        Initializes the probability map with optional dice weights.
+        
+        Args:
+            dice_weights: Optional dictionary mapping die values (1-6) to weights.
+                        If None, uniform probability (equal weights) is assumed.
         """
+        # Normalize weights if provided, otherwise use uniform weights
+        self._dice_weights = self.__normalize_weights(dice_weights)
         self._lookup_table = self.__generate_dice_combinations_lookup()
         self._probability_matrix = self.__create_probability_matrix(self._lookup_table)
+
+    def __normalize_weights(self, weights: Optional[Dict[int, float]]) -> Dict[int, float]:
+        """
+        Normalizes the provided weights to ensure they sum to 1.
+        If weights are None, returns uniform probability distribution.
+        
+        Args:
+            weights: Dictionary mapping die values (1-6) to weights
+            
+        Returns:
+            Dictionary with normalized weights that sum to 1
+        """
+        if weights is None:
+            # Default to uniform distribution
+            return {i: 1/6 for i in range(1, 7)}
+        
+        # Ensure all faces have weights
+        normalized = {i: weights.get(i, 0.0) for i in range(1, 7)}
+        
+        # Normalize to sum to 1
+        weight_sum = sum(normalized.values())
+        if weight_sum == 0:
+            raise ValueError("Sum of weights cannot be zero")
+        
+        return {face: weight/weight_sum for face, weight in normalized.items()}
 
     def __generate_dice_combinations_lookup(self) -> LookupTable:
         """
@@ -292,73 +322,61 @@ class DiceProbabilityMap:
         return distributions
     
     def __aggregate_scores_for_n_dice(self, n: int, lookup_table: Dict[Tuple[int, ...], List[Any]]) -> List[np.ndarray]:
-        """
-        Aggregates all possible scores for n dice when putting aside m dice (for m in 1..n).
-        None results are counted as score 0. Takes into account all possible permutations
-        of each dice combination.
+        max_score = 8000
+        array_size = max_score // 50 + 1
         
-        Args:
-            n: Number of dice rolled
-            lookup_table: Precomputed lookup table from generate_dice_combinations_lookup()
-        
-        Returns:
-            List[np.ndarray]: List of length n, where each element is a numpy array representing
-            the frequency of scores for putting aside m dice (m is the index + 1).
-            Each array index i represents the frequency of score i*50.
-        """
-        max_score = 8000  # Maximum possible score with 6 dice
-        array_size = max_score // 50 + 1  # Size needed to represent all possible scores
-        
-        # Initialize list of arrays for each m in 1..n
-        score_frequencies = [np.zeros(array_size, dtype=int) for _ in range(n)]
+        score_frequencies = [np.zeros(array_size, dtype=float) for _ in range(n)]
         
         # Generate all possible n-dice combinations
         for dice_combo in combinations_with_replacement(range(1, 7), n):
-            # Calculate number of permutations for this combination
-            perm_count = self.__get_permutation_count(dice_combo)
+            # Calculate weighted probability for this combination
+            combo_probability = self.__get_combination_probability(dice_combo)
             
             # Get the scoring combinations for this dice set
             combinations = lookup_table[dice_combo]
             
             # For each number of dice we might put aside (m from 1 to n)
             for m in range(n):
-                combination = combinations[m]  # Get the best combination for putting aside m+1 dice
+                combination = combinations[m]
                 if combination is not None:
-                    # Extract score and convert to array index
                     _, score = combination
                     score_index = score // 50
-                    # Increment the frequency by the number of permutations
-                    score_frequencies[m][score_index] += perm_count
+                    # Add weighted probability instead of count
+                    score_frequencies[m][score_index] += combo_probability
                 else:
-                    # Count None as score 0
-                    score_frequencies[m][0] += perm_count
+                    score_frequencies[m][0] += combo_probability
         
         return score_frequencies
     
-    def __get_permutation_count(self, dice_combo: Tuple[int, ...]) -> int:
+    def __get_combination_probability(self, dice_combo: Tuple[int, ...]) -> float:
         """
-        Calculate the number of unique permutations for a combination of dice.
-        Uses multinomial coefficient to handle repeated values correctly.
+        Calculate the probability of getting a specific dice combination
+        with the current die weights.
         
         Args:
-            dice_combo: Tuple of dice values (sorted)
-        
+            dice_combo: Tuple of dice values
+            
         Returns:
-            Number of unique permutations
+            Probability of getting this combination
         """
-        n = len(dice_combo)
         # Count occurrences of each value
-        value_counts = list(Counter(dice_combo).values())
+        counter = Counter(dice_combo)
         
-        # Calculate multinomial coefficient: n! / (n1! * n2! * ... * nk!)
-        # where n is total length and ni are counts of each unique value
-        result = math.factorial(n)
-        for count in value_counts:
-            result //= math.factorial(count)
+        # Calculate multinomial probability
+        n = len(dice_combo)
         
-        return result
+        # Multinomial coefficient
+        coefficient = math.factorial(n)
+        for count in counter.values():
+            coefficient //= math.factorial(count)
+        
+        # Multiply by probabilities for each face value
+        probability = coefficient
+        for face, count in counter.items():
+            probability *= (self._dice_weights[face] ** count)
+        
+        return probability
 
-# Example usage:
 if __name__ == "__main__":
     prob_map = DiceProbabilityMap()
     

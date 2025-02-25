@@ -1,6 +1,5 @@
 import sys
 import os
-# Add this line at the top of your test file - then imports work like you'd expect
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from state_transition import StateTransition
 
